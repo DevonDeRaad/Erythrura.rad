@@ -1,0 +1,335 @@
+library(ggplot2)
+library(vcfR)
+library(adegenet)
+library(adegraphics)
+library(pegas)
+library(StAMPP)
+library(lattice)
+library(gplots)
+library(ape)
+library(ggmap) 
+
+
+## step 2
+#
+full.ery.vcf <- read.vcfR("~/Dropbox/full.ery/populations.snps.vcf") #read in all data
+head(full.ery.vcf) #check the vcf object
+full.ery.vcf@fix[1:10,1:5] #check 
+
+#quick check read depth distribution per individual
+dp <- extract.gt(full.ery.vcf, element='DP', as.numeric=TRUE)
+#pdf("DP_RAD_data.pdf", width = 10, height=3) # boxplot
+par(mar=c(8,4,1,1)) 
+boxplot(dp, las=3, col=c("#C0C0C0", "#808080"), ylab="Read Depth (DP)",
+        las=2, cex=0.4, cex.axis=0.5)
+#dev.off()
+#zoom to smaller values
+#pdf("DP_RAD_data_zoom.pdf", width = 10, height=3) # boxplot
+par(mar=c(8,4,1,1))
+boxplot(dp, las=3, col=c("#C0C0C0", "#808080"), ylab="Read Depth (DP)",
+        las=2, cex=0.4, cex.axis=0.5, ylim=c(0,50))
+abline(h=8, col="red")
+#dev.off() 
+
+### convert to genlight
+full.ery.genlight <- vcfR2genlight(full.ery.vcf, n.cores=1)
+#locNames(aa.genlight) <- paste(vcf@fix[,1],vcf@fix[,2],sep="_") # add real SNP.names
+#SET NAMES HERE
+# add popnames: here "population" (group) names are chars 5,6,7 of ind name 
+pop(full.ery.genlight)<-substr(indNames(full.ery.genlight),3,5) 
+
+# check the genlight
+full.ery.genlight # check the basic info on the genlight object
+indNames(full.ery.genlight) # check individual names
+# N missing SNPs per sample
+x <- summary(t(as.matrix(full.ery.genlight)))
+individs<-colnames(x)
+num.missing.snps<-x[7,]
+#create DF with missing snp info
+reffed.missing.snps<-data.frame(individs, num.missing.snps)
+rownames(reffed.missing.snps) <- NULL
+reffed.missing.snps$num.missing.snps <- gsub("NA's   :", "", reffed.missing.snps$num.missing.snps)
+reffed.missing.snps$num.missing.snps<- as.numeric(reffed.missing.snps$num.missing.snps)
+reffed.missing.snps$miss.percentage<-(reffed.missing.snps$num.missing.snps/full.ery.genlight$n.loc)
+reffed.missing.snps
+
+# create new genlight using this selection
+#drop the three samples that are over 50% missing SNPs
+filtered.full.ery <- new("genlight",
+                            (as.matrix(full.ery.genlight)[c(1:8,10:34,36,38:56), ]))
+
+indNames(filtered.full.ery) # check individual names
+
+fiftypercent.filtered.full.ery <- new("genlight", (as.matrix(filtered.full.ery))
+                                             [,(colSums(is.na (as.matrix(filtered.full.ery))) < 27)])
+fiftypercent.filtered.full.ery$n.loc
+fiftypercent.filtered.full.ery$ind.names
+
+#90
+ninetypercent.filtered.full.ery <- new("genlight", (as.matrix(filtered.full.ery))
+                                      [,(colSums(is.na (as.matrix(filtered.full.ery))) < 6)])
+ninetypercent.filtered.full.ery$n.loc
+ninetypercent.filtered.full.ery$ind.names
+
+pop(ninetypercent.filtered.full.ery)<-substr(indNames(ninetypercent.filtered.full.ery),3,5) 
+pop(fiftypercent.filtered.full.ery)<-substr(indNames(fiftypercent.filtered.full.ery),3,5) 
+
+#pca with all snps
+pca.1 <- glPca(ninetypercent.filtered.full.ery, nf=5) # retain first 300 axes (for later use in find.clusters); slow function
+#pca.2 <- glPca(fiftypercent.filtered.full.ery, nf=5) # retain first 300 axes (for later use in find.clusters); slow function
+
+#quick plot
+plot(pca.1$scores[,1], pca.1$scores[,2])
+#plot(pca.2$scores[,1], pca.2$scores[,2])
+#pull pca scores out of df
+pca.scores<-as.data.frame(pca.1$scores)
+#pca.scores2<-as.data.frame(pca.2$scores)
+#ggplot color by species
+ggplot(pca.scores, aes(x=PC1, y=PC2, color=pop(ninetypercent.filtered.full.ery))) +
+  geom_point(cex = 2)
+#ggplot(pca.scores2, aes(x=PC1, y=PC2, color=pop(ninetypercent.filtered.full.ery))) +
+  geom_point(cex = 2)
+#ggplot color by species
+ggplot(pca.scores, aes(x=PC3, y=PC4, color=pop(ninetypercent.filtered.full.ery))) +
+  geom_point(cex = 2)
+
+
+
+### Calculate Nei's distances between individuals/pops
+# Nei's 1972 distance between indivs
+ery.D.ind.90 <- stamppNeisD(ninetypercent.filtered.full.ery, pop = FALSE)
+ery.D.ind.50 <- stamppNeisD(fiftypercent.filtered.full.ery, pop = FALSE)
+# exportmatrix - for SplitsTree
+#stamppPhylip(todi.D.ind, file="~/Desktop/Todiramphus/reffed.medfilt.todi.indiv_Neis_distance.phy.dst")
+# Nei's 1972 distance between pops
+ery.D.pop.90 <- stamppNeisD(ninetypercent.filtered.full.ery, pop = TRUE)
+ery.D.pop.50 <- stamppNeisD(fiftypercent.filtered.full.ery, pop = TRUE)
+# export
+#stamppPhylip(todi.D.pop, file="~/Desktop/Todiramphus/reffed.medfilt.todi.pops_Neis_distance.phy.dst")
+### Calculate pairwise Fst among populations
+ninetypercent.filtered.full.ery@ploidy <- as.integer(ploidy(ninetypercent.filtered.full.ery))
+fiftypercent.filtered.full.ery@ploidy <- as.integer(ploidy(fiftypercent.filtered.full.ery))
+#
+ery.fst.90<-stamppFst(ninetypercent.filtered.full.ery, nboots = 1, percent =95, nclusters=5)
+ery.fst.50<-stamppFst(fiftypercent.filtered.full.ery, nboots = 1, percent =95, nclusters=5)
+#modify the matrix for opening in SplitsTree
+ery.fst.90
+ery.fst.50
+### heatmap of the indivs distance matrix
+colnames(ery.D.ind.90) <- rownames(ery.D.ind)
+colnames(ery.D.ind.50) <- rownames(ery.D.ind)
+
+#pdf(file="~/Desktop/Todiramphus/medfilt.reffed.Neis_dist_heatmap.pdf", width=10, height=10)
+heatmap.2(ery.D.ind.50, trace="none", cexRow=0.4, cexCol=0.4)+ title("50% complete matrix")
+heatmap.2(ery.D.ind.90, trace="none", cexRow=0.4, cexCol=0.4)+ title("90% complete matrix")
+#23619 is the Palau individual which comes out as sister to all of tri/pap
+#32805 & DOT-209 are from Guadalcanal and Kolombangara, and are the only differentiated tri/pap
+#dev.off() 
+# plot unrooted NJ tree
+plot(nj(ery.D.ind.50), type = "unrooted", cex = .5)+ title("50% complete matrix")
+plot(nj(ery.D.ind.90), type = "unrooted", cex = .5)+ title("90% complete matrix")
+
+#we now have confidence that missing data is not affecting population structure inference
+#we use the 90% complete matrix going forward
+
+
+
+#drop down to just papuana/trichroa to look closely for divergence
+ninety.pap.tri.full.ery <- new("genlight",
+                         (as.matrix(ninetypercent.filtered.full.ery)[c(1:44), ]))
+
+pop(ninety.pap.tri.full.ery)<-c("pap","pap","pap","pap","pap","pap","pap","pap","png.tri","png.tri","png.tri","png.tri"
+                         ,"png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri"
+                         ,"png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri"
+                         ,"png.tri","png.tri","png.tri","png.tri","png.tri","palau.tri","aus.tri","sols.tri"
+                         ,"sols.tri","sols.tri","sols.tri","sols.tri","sols.tri","sols.tri","sols.tri","sols.tri")
+
+#pca with all snps
+pap.tri.pca.90 <- glPca(ninety.pap.tri.full.ery, nf=6) # retain first 300 axes (for later use in find.clusters); slow function
+
+#pull pca scores out of df
+pap.tri.pca.scores.90<-as.data.frame(pap.tri.pca.90$scores)
+
+#ggplot color by species
+ggplot(pap.tri.pca.scores.90, aes(x=PC1, y=PC2, color=pop(ninety.pap.tri.full.ery))) +
+  geom_point(cex = 2)
+
+#ggplot color by species
+ggplot(pap.tri.pca.scores.90, aes(x=PC3, y=PC4, color=pop(ninety.pap.tri.full.ery))) +
+  geom_point(cex = 2)
+
+#ggplot color by species
+ggplot(pap.tri.pca.scores, aes(x=PC5, y=PC6, color=pop(pap.tri.full.ery))) +
+  geom_point(cex = 2)
+
+#redefine solomons pops
+pop(ninety.pap.tri.full.ery)<-c("pap","pap","pap","pap","pap","pap","pap","pap","png.tri","png.tri","png.tri","png.tri"
+                               ,"png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri"
+                               ,"png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri","png.tri"
+                               ,"png.tri","png.tri","png.tri","png.tri","png.tri","palau.tri","aus.tri","sols.makira.tri"
+                               ,"sols.makira.tri","sols.guadalcanal.tri","sols.guadalcanal.tri","sols.kolombangara.tri","sols.tri"
+                               ,"sols.guadalcanal.tri","sols.guadalcanal.tri","sols.malaita.tri")
+
+#ggplot color by species
+ggplot(pap.tri.pca.scores.90, aes(x=PC1, y=PC2, color=pop(ninety.pap.tri.full.ery))) +
+  geom_point(cex = 2)
+
+#guadalcanal and kolombangara trichroa separate out on PC2
+#Papuana, and trichroa from PNG, makira, malaita, and australia all cluster on PC 1&2
+
+#ggplot color by species
+ggplot(pap.tri.pca.scores.90, aes(x=PC3, y=PC4, color=pop(pap.tri.full.ery))) +
+  geom_point(cex = 2)
+
+### Calculate Nei's distances between individuals/pops
+# Nei's 1972 distance between indivs
+pap.tri.ery.D.ind.90 <- stamppNeisD(ninety.pap.tri.full.ery, pop = FALSE)
+# exportmatrix - for SplitsTree
+#stamppPhylip(todi.D.ind, file="~/Desktop/Todiramphus/reffed.medfilt.todi.indiv_Neis_distance.phy.dst")
+# Nei's 1972 distance between pops
+pap.tri.ery.D.pop.90 <- stamppNeisD(ninety.pap.tri.full.ery, pop = TRUE)
+# export
+#stamppPhylip(todi.D.pop, file="~/Desktop/Todiramphus/reffed.medfilt.todi.pops_Neis_distance.phy.dst")
+### Calculate pairwise Fst among populations
+ninety.pap.tri.full.ery@ploidy <- as.integer(ploidy(ninety.pap.tri.full.ery))
+#
+pap.tri.ery.fst.90<-stamppFst(ninety.pap.tri.full.ery, nboots = 1, percent =95, nclusters=5)
+#modify the matrix for opening in SplitsTree
+pap.tri.ery.fst.90
+#palau trichroa ~.2 Fst with all other groups
+#PNG trichroa / papuana = .007 Fst
+### heatmap of the indivs distance matrix
+colnames(pap.tri.ery.D.ind.90) <- rownames(pap.tri.ery.D.ind.90)
+
+#pdf(file="~/Desktop/Todiramphus/medfilt.reffed.Neis_dist_heatmap.pdf", width=10, height=10)
+heatmap.2(pap.tri.ery.D.ind.90, trace="none", cexRow=0.4, cexCol=0.4)
+#23619 is the Palau individual which comes out as sister to all of tri/pap
+#32805 & DOT-209 are from Guadalcanal and Kolombangara, and are the only differentiated tri/pap
+#dev.off() 
+# plot unrooted NJ tree
+plot(nj(pap.tri.ery.D.ind.90), type = "unrooted", cex = .5)
+
+
+
+
+
+#read in stacks populations Fst calculation from unfiltered snps
+full.ery.pap.ref.fst<-read.delim(file = "~/Dropbox/full.ery/populations.fst_papuana-trichroa.tsv")
+mean(full.ery.pap.ref.fst$AMOVA.Fst)
+#avg. Fst = .025
+
+#combine unmapped chromosomes
+levels(full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chrUn_.*", "unk", full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-as.factor(full.ery.pap.ref.fst$Chr)
+levels(full.ery.pap.ref.fst$Chr)
+#
+full.ery.pap.ref.fst$Chr<-gsub(".*_random", "unk", full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-as.factor(full.ery.pap.ref.fst$Chr)
+levels(full.ery.pap.ref.fst$Chr)
+
+full.ery.pap.ref.fst$Chr<-gsub("chrM", "M", full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr1", 1, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr1A", "1A", full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr2", 2, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr4", 4, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr4A", "4A", full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr5", 5, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr6", 6, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr7", 7, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr9", 9, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr10", 10, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr13", 13, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr20", 20, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr21", 21, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr24", 24, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr26", 26, full.ery.pap.ref.fst$Chr)
+full.ery.pap.ref.fst$Chr<-gsub("chr27", 27, full.ery.pap.ref.fst$Chr)
+
+
+
+full.ery.pap.ref.fst$Chr<-as.factor(full.ery.pap.ref.fst$Chr)
+levels(full.ery.pap.ref.fst$Chr)
+
+ggplot(data = full.ery.pap.ref.fst) + 
+  geom_point(mapping = aes(x = X..Locus.ID, y = AMOVA.Fst, color = Chr))
+
+#subset outlier snps
+full.elevated.snps<-full.ery.pap.ref.fst[full.ery.pap.ref.fst$AMOVA.Fst > .5,]
+full.elevated.snps<-droplevels(full.elevated.snps)
+rownames(full.elevated.snps)<-c()
+
+full.elevated.snps[,1:8]
+
+
+#
+Chr1<-subset(full.ery.pap.ref.fst,Chr == 1)
+Chr1A<-subset(full.ery.pap.ref.fst,Chr == "1A")
+Chr2<-subset(full.ery.pap.ref.fst,Chr == 2)
+Chr4<-subset(full.ery.pap.ref.fst,Chr == 4)
+Chr4A<-subset(full.ery.pap.ref.fst,Chr == "4A")
+Chr5<-subset(full.ery.pap.ref.fst,Chr == 5)
+Chr6<-subset(full.ery.pap.ref.fst,Chr == 6)
+Chr7<-subset(full.ery.pap.ref.fst,Chr == 7)
+Chr9<-subset(full.ery.pap.ref.fst,Chr == 9)
+Chr10<-subset(full.ery.pap.ref.fst,Chr == 10)
+Chr13<-subset(full.ery.pap.ref.fst,Chr == 13)
+Chr20<-subset(full.ery.pap.ref.fst,Chr == 20)
+Chr21<-subset(full.ery.pap.ref.fst,Chr == 21)
+Chr24<-subset(full.ery.pap.ref.fst,Chr == 24)
+Chr26<-subset(full.ery.pap.ref.fst,Chr == 26)
+Chr27<-subset(full.ery.pap.ref.fst,Chr == 27)
+ChrMT<-subset(full.ery.pap.ref.fst,Chr == "M")
+Chrunk<-subset(full.ery.pap.ref.fst,Chr == "unk")
+
+full.ery.chr.table<-as.data.frame(table(full.ery.pap.ref.fst$Chr))
+names(full.ery.chr.table) <- c("chromosome", "snps")
+full.ery.chr.table<-full.ery.chr.table[c(1,5,11,12,13,14,15,16,2,3,6,7,8,9,10,17,18),]
+full.ery.chr.table$chromosome
+full.ery.chr.table$length<- c(118548696, 156412533, 69780378, 20704505, 62374962,
+                         36305782, 39844632, 27241186, 20806668, 16962381, 15652063, 5979137, 8021379,
+                         4907541, 4618897, 16853, 174341365)
+full.ery.chr.table
+
+full.ery.chr.table$fst<-c(mean(Chr1$AMOVA.Fst),mean(Chr2$AMOVA.Fst),
+                 mean(Chr4$AMOVA.Fst),mean(Chr4A$AMOVA.Fst),mean(Chr5$AMOVA.Fst),mean(Chr6$AMOVA.Fst),
+                 mean(Chr7$AMOVA.Fst),mean(Chr9$AMOVA.Fst),mean(Chr10$AMOVA.Fst),
+                 mean(Chr13$AMOVA.Fst),mean(Chr20$AMOVA.Fst),mean(Chr21$AMOVA.Fst),
+                 mean(Chr24$AMOVA.Fst),mean(Chr26$AMOVA.Fst),mean(Chr27$AMOVA.Fst),
+                 mean(ChrMT$AMOVA.Fst),mean(Chrunk$AMOVA.Fst))
+full.ery.chr.table
+
+ggplot(data = full.ery.chr.table, mapping = aes(x = length, y = snps, color = chromosome))+
+  geom_point() + ggtitle("snp # vs. chromosome length")
+
+xx <- barplot(full.ery.chr.table$fst, xaxt = 'n', xlab = '', width = 0.85, ylim = c(0,.2),
+              ylab = "Avg. Fst")
+## Add text at top of bars
+text(x = xx, y = full.ery.chr.table$fst, label = full.ery.chr.table$snps, pos = 3, cex = 0.8, col = "red")
+## Add x-axis labels 
+axis(1, at=xx, labels=full.ery.chr.table$chromosome, tick=FALSE, las=1, line=-0.5, cex.axis=0.5)
+
+
+ggplot(data = full.ery.pap.ref.fst) + 
+  geom_point(mapping = aes(x = X..Locus.ID, y = AMOVA.Fst, color = Chr))
+
+ggplot(data = full.elevated.snps) + 
+  geom_point(mapping = aes(x = X..Locus.ID, y = AMOVA.Fst, color = Chr))
+
+ggplot(data = full.ery.pap.ref.fst) + 
+  geom_point(mapping = aes(x = X..Locus.ID, y = LOD, color = Chr))
+
+ggplot(data = full.ery.pap.ref.fst) + 
+  geom_point(mapping = aes(x = X..Locus.ID, y = Corrected.AMOVA.Fst, color = Chr))+ 
+  theme(legend.position="none")
+
+ggplot(data = full.ery.pap.ref.fst) + 
+  geom_point(mapping = aes(x = X..Locus.ID, y = Smoothed.AMOVA.Fst, color = Chr))+ 
+  theme(legend.position="none")
+
+#the 4A region is in a non-coding region, just downstream of gene: testis specific serine kinase 2 (TSSK2)
+#unlikely to actually be controlling the region, seedcracker paper set the cutoff for "divergent SNPs" at .8 Fst
+#looks unlikely that any of our rad loci are in controlling region
+
+
+
