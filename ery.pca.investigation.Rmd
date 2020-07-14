@@ -1,0 +1,312 @@
+---
+title: "ery.pca.investigation"
+author: "Devon DeRaad"
+date: "7/14/2020"
+output: html_document
+---
+
+```{r, results = "hide"}
+library(ggplot2)
+library(vcfR)
+library(adegenet)
+library(adegraphics)
+library(pegas)
+library(StAMPP)
+library(lattice)
+library(gplots)
+library(ape)
+library(ggmap) 
+
+
+#liberal unlinked
+eryth.vcf <- read.vcfR("~/Downloads/3bLibUnfilteredVCF/bi.allelic.ery.unlinked.recode.vcf")
+liberal.unlinked.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+liberal.unlinked.gen
+
+#liberal all
+eryth.vcf <- read.vcfR("~/Downloads/3bLibUnfilteredVCF/populations.snps.vcf")
+liberal.all.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+liberal.all.gen
+
+
+#conserv unlinked
+eryth.vcf <- read.vcfR("~/Downloads/3bConUnfilteredVCF/bi.allelic.unlinked.conserv.ery.recode.vcf")
+conserv.unlinked.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+conserv.unlinked.gen
+
+#conserv all
+eryth.vcf <- read.vcfR("~/Downloads/3bConUnfilteredVCF/populations.conserv.snps.vcf")
+conserv.all.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+conserv.all.gen
+```
+
+
+```{r}
+#makepca1
+pca <- glPca(liberal.all.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(liberal.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("liberal all SNPs")+theme(legend.title = element_blank()) 
+
+#makepca2
+pca <- glPca(liberal.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(liberal.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("liberal unlinked SNPs")+theme(legend.title = element_blank())
+
+#makepca3
+pca <- glPca(conserv.all.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("conservative all SNPs")+theme(legend.title = element_blank())
+
+#makepca4
+pca <- glPca(conserv.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca4<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("conservative unlinked SNPs")+theme(legend.title = element_blank())
+
+
+grid.arrange(pca1,pca2,
+             pca3,pca4, nrow = 2)
+
+```
+
+
+```{r}
+#investigate whether outlier SNPs are driving the divergence
+pca <- glPca(conserv.unlinked.gen, nf=10)
+df<-as.data.frame(cbind(as.character(conserv.unlinked.gen@chromosome),conserv.unlinked.gen@position,pca$loadings[,1]))
+colnames(df)<-c("chrom","pos","PC1loading")
+df$PC1loading<-as.numeric(as.character(df$PC1loading))
+hist(df$PC1loading)
+abline(v=sd(df$PC1loading)*2, col="red")
+abline(v=-sd(df$PC1loading)*2, col="red")
+df[abs(df$PC1loading) > sd(df$PC1loading)*2,]
+```
+
+Investigate the consequence of removing all SNPs with PCA axis 1 loadings > 2 standard deviations from mean
+```{r}
+#
+pca<- glPca(conserv.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("1833 unlinked SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.unlinked.gen[,abs(df$PC1loading) > sd(df$PC1loading)*2], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("120 strongest PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.unlinked.gen[,!abs(df$PC1loading) > sd(df$PC1loading)*2], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("1713 remaining PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+grid.arrange(pca.1,pca.2,pca.3, nrow=1)
+```
+
+Try 3 standard deviations from mean
+```{r}
+#does the cutoff affect this phenomenon?
+pca<- glPca(conserv.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("1833 unlinked SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.unlinked.gen[,abs(df$PC1loading) > sd(df$PC1loading)*3], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("35 strongest PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.unlinked.gen[,!abs(df$PC1loading) > sd(df$PC1loading)*3], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("1798 remaining PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+grid.arrange(pca.1,pca.2,pca.3, nrow=1)
+```
+
+Try four standard deviations away from mean
+```{r}
+#does the cutoff affect this phenomenon?
+pca<- glPca(conserv.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("1833 unlinked SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.unlinked.gen[,abs(df$PC1loading) > sd(df$PC1loading)*4], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("13 strongest PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.unlinked.gen[,!abs(df$PC1loading) > sd(df$PC1loading)*4], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("1820 remaining PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+grid.arrange(pca.1,pca.2,pca.3, nrow=1)
+```
+
+These 13 SNPs are essentially the only thing in this 1833 SNP matrix that separate the species
+```{r}
+hist(df$PC1loading)
+abline(v=sd(df$PC1loading)*4, col="red")
+abline(v=-sd(df$PC1loading)*4, col="red")
+
+#list the 13 outlier SNPs
+df[abs(df$PC1loading) > sd(df$PC1loading)*4,]
+```
+
+Are the outlier PC1 loading SNPs also outliers in terms of allele frequency difference between species?
+```{r}
+#Are the outlier PC1 loading SNPs also outliers in terms of allele frequency difference between species?
+outlier.mat<-as.matrix(conserv.unlinked.gen[,abs(df$PC1loading) > sd(df$PC1loading)*4])
+whole.mat<-as.matrix(conserv.unlinked.gen[,!abs(df$PC1loading) > sd(df$PC1loading)*4])
+
+#calc allele freq difference between 13 outlier SNPs and rest of genome
+pap.mat<-outlier.mat[1:7,]
+tri.mat<-outlier.mat[8:33,]
+pap.freq<-c()
+tri.freq<-c()
+for (i in 1:ncol(outlier.mat)){
+  pap.freq[i]<-(sum(na.omit(pap.mat[,i]))*.5)/sum(!is.na(pap.mat[,i]))
+  tri.freq[i]<-(sum(na.omit(tri.mat[,i]))*.5)/sum(!is.na(tri.mat[,i]))
+}
+outlier.freq.diff<-abs(pap.freq-tri.freq)
+outlier.freq.diff
+
+#non-outliers
+pap.mat<-whole.mat[1:7,]
+tri.mat<-whole.mat[8:33,]
+pap.freq<-c()
+tri.freq<-c()
+for (i in 1:ncol(whole.mat)){
+  pap.freq[i]<-(sum(na.omit(pap.mat[,i]))*.5)/sum(!is.na(pap.mat[,i]))
+  tri.freq[i]<-(sum(na.omit(tri.mat[,i]))*.5)/sum(!is.na(tri.mat[,i]))
+}
+all.freq.diff<-abs(pap.freq-tri.freq)
+all.freq.diff
+
+#vizualize hists
+par(mfrow=c(2,1))
+hist(all.freq.diff, xlim=c(0,1), col=rgb(0,0,1,1/4), main="1820 SNPs")
+hist(outlier.freq.diff, xlim=c(0,1), col=rgb(1,0,0,1/4), main = "13 high loading PC1 SNPs")
+
+```
+
+Does this pattern hold for linked SNPs?
+```{r}
+#investigate whether pattern holds for linked SNPs
+pca <- glPca(conserv.all.gen, nf=10)
+df<-as.data.frame(cbind(as.character(conserv.all.gen@chromosome), conserv.all.gen@position, pca$loadings[,1]))
+colnames(df)<-c("chrom","pos","PC1loading")
+df$PC1loading<-as.numeric(as.character(df$PC1loading))
+hist(df$PC1loading)
+abline(v=sd(df$PC1loading)*4, col="red")
+abline(v=-sd(df$PC1loading)*4, col="red")
+#list loading outliers
+df[abs(df$PC1loading) > sd(df$PC1loading)*4,]
+
+pca<- glPca(conserv.all.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("7553 binary SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.all.gen[,abs(df$PC1loading) > sd(df$PC1loading)*4], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("46 strongest PC1 loading SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+pca<- glPca(conserv.all.gen[,!abs(df$PC1loading) > sd(df$PC1loading)*4], nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca.3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2.5)+
+  ggtitle("7505 remaining SNPs")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+grid.arrange(pca.1,pca.2,pca.3, nrow=1)
+```
+
+Make neighbor joining trees from all SNPs, non-outliers, and outliers
+```{r}
+#NJ tree with all 7553 SNPs
+conserv.all.gen@pop<-as.factor(substr(conserv.all.gen$ind.names, 1,3))
+neisd <- stamppNeisD(conserv.all.gen, pop = FALSE)
+plot(nj(neisd), type = "unrooted", cex = .5)
+
+#NJ tree with 7505 non-outlier SNPs
+conserv.all.gen@pop<-as.factor(substr(conserv.all.gen$ind.names, 1,3))
+neisd <- stamppNeisD(conserv.all.gen[,!abs(df$PC1loading) > sd(df$PC1loading)*4], pop = FALSE)
+plot(nj(neisd), type = "unrooted", cex = .5)
+
+#make genlight with only 46 outlier SNPs
+conserv.all.outliers <- new("genlight", (as.matrix(conserv.all.gen[,abs(df$PC1loading) > sd(df$PC1loading)*4])))
+#NJ tree with the 46 outlier SNPs
+conserv.all.outliers@pop<-as.factor(substr(conserv.all.outliers$ind.names, 1,3))
+neisd <- stamppNeisD(conserv.all.outliers, pop = FALSE)
+neisd<-neisd[c(1:8,10:35),c(1:8,10:35)]
+plot(nj(neisd), type = "unrooted", cex = .5)
+```
+
+There are 46 random SNPs across the genome that strongly separate the species against a background of 7K SNPs that are homogenous. Not sure what this means
+```{r}
+#list loading outliers
+df[abs(df$PC1loading) > sd(df$PC1loading)*4,]
+```
+
+
