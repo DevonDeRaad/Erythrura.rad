@@ -1,0 +1,191 @@
+---
+title: "ery.pca.investigation.2"
+author: "Devon DeRaad"
+date: "7/15/2020"
+output: html_document
+---
+
+```{r, include=FALSE}
+library(ggplot2)
+library(vcfR)
+library(adegenet)
+library(adegraphics)
+library(pegas)
+library(StAMPP)
+library(lattice)
+library(gplots)
+library(ape)
+library(ggmap)
+library(gridExtra)
+```
+
+
+```{r, results = "hide", warning=FALSE}
+
+#liberal unlinked
+eryth.vcf <- read.vcfR("~/Downloads/3bLibUnfilteredVCF/bi.allelic.ery.unlinked.recode.vcf")
+liberal.unlinked.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+liberal.unlinked.gen
+
+#liberal all
+eryth.vcf <- read.vcfR("~/Downloads/3bLibUnfilteredVCF/populations.snps.vcf")
+liberal.all.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+liberal.all.gen
+
+
+#conserv unlinked
+eryth.vcf <- read.vcfR("~/Downloads/3bConUnfilteredVCF/bi.allelic.unlinked.conserv.ery.recode.vcf")
+conserv.unlinked.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+conserv.unlinked.gen
+
+#conserv all
+eryth.vcf <- read.vcfR("~/Downloads/3bConUnfilteredVCF/populations.conserv.snps.vcf")
+conserv.all.gen <- vcfR2genlight(eryth.vcf, n.cores=1)
+conserv.all.gen
+```
+
+#Make PCA for each dataset
+```{r}
+#makepca1
+pca <- glPca(liberal.all.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(liberal.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("liberal all SNPs")+theme(legend.title = element_blank()) 
+
+#makepca2
+pca <- glPca(liberal.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(liberal.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("liberal unlinked SNPs")+theme(legend.title = element_blank())
+
+#makepca3
+pca <- glPca(conserv.all.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.all.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("conservative all SNPs")+theme(legend.title = element_blank())
+
+#makepca4
+pca <- glPca(conserv.unlinked.gen, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+#ggplot color by species
+pca4<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(conserv.unlinked.gen$ind.names, 1,3)))) +
+  geom_point(cex = 2)+
+  ggtitle("conservative unlinked SNPs")+theme(legend.title = element_blank())
+
+
+grid.arrange(pca1,pca2,
+             pca3,pca4, nrow = 2)
+
+```
+
+Define function to subset SNPs and make pcas
+```{r}
+#investigate whether outlier SNPs are driving the divergence
+#define function to subset outlier SNPs (specify list of #SDs from mean to investigate) in PC1 loading and investigate the effect
+investigate.pca.outliers <- function(gen, std){
+  genlight<-gen
+for (i in std){
+  pca <- glPca(genlight, nf=10)
+  df<-as.data.frame(cbind(as.character(genlight@chromosome), genlight@position, pca$loadings[,1]))
+  colnames(df)<-c("chrom","pos","PC1loading")
+  df$PC1loading<-as.numeric(as.character(df$PC1loading))
+  hist<-ggplot(df, aes(x=PC1loading))+
+              geom_histogram(color="black", fill="white", bins=20)+
+              geom_vline(aes(xintercept=sd(PC1loading)*i), color = "red")+
+              geom_vline(aes(xintercept=-sd(PC1loading)*i), color = "red")+
+              theme_classic()+
+              ylab(paste(i,"SDs from mean"))
+    #list loading outliers
+  print(paste("outliers >",i,"standard deviations from mean PC1 loading"))
+  print(head(df[abs(df$PC1loading) > sd(df$PC1loading)*i,]))
+  print(table(df$chrom[abs(df$PC1loading) > sd(df$PC1loading)*i])[table(df$chrom[abs(df$PC1loading) > sd(df$PC1loading)*i]) > 0])
+  #pca1
+  pca<- glPca(genlight, nf=10)
+  pca.scores<-as.data.frame(pca$scores)
+  #ggplot color by species
+  pca.1<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(genlight$ind.names, 1,3)))) +
+    geom_point(cex = 2.5)+
+    ggtitle(paste(ncol(genlight),"binary SNPs"))+
+    theme_classic()+
+    theme(legend.position = "none")
+  #pca2
+  pca<- glPca(genlight[,abs(df$PC1loading) > sd(df$PC1loading)*i], nf=10)
+  pca.scores<-as.data.frame(pca$scores)
+  #ggplot color by species
+  pca.2<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(genlight$ind.names, 1,3)))) +
+    geom_point(cex = 2.5)+
+    ggtitle(paste(ncol(genlight[,abs(df$PC1loading) > sd(df$PC1loading)*i]),"strongest PC1 loading SNPs"))+
+    theme_classic()+
+    theme(legend.position = "none")
+  #pca3
+  pca<- glPca(genlight[,!abs(df$PC1loading) > sd(df$PC1loading)*i], nf=10)
+  pca.scores<-as.data.frame(pca$scores)
+  #ggplot color by species
+  pca.3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=as.factor(substr(genlight$ind.names, 1,3)))) +
+    geom_point(cex = 2.5)+
+    ggtitle(paste(ncol(genlight[,!abs(df$PC1loading) > sd(df$PC1loading)*i]),"remaining SNPs"))+
+    theme_classic()+
+    theme(legend.position = "none")
+  #print together
+  gl<-list(pca.1,pca.2,pca.3,hist)
+  grid.arrange(grobs = gl,
+    widths = c(1,1,1),
+    layout_matrix = rbind(c(1,2,3),
+                          c(4,4,4)))
+  }
+}
+```
+
+#Investigate conservatively filtered no SNPs nearer than 10kb dataset
+```{r}
+#investigate conserv filtered unlinked dataset
+investigate.pca.outliers(gen = conserv.unlinked.gen, std=2:5)
+```
+
+#Investigate conservatively filtered all SNPs dataset
+```{r}
+#investigate conserv filtered linked dataset
+investigate.pca.outliers(gen = conserv.all.gen, std=2:5)
+```
+
+#Investigate liberally filtered unlinked dataset
+```{r}
+#investigate liberal filtered unlinked dataset
+investigate.pca.outliers(gen = liberal.unlinked.gen, std=2:5)
+```
+
+#Investigate liberally filtered all SNP dataset
+```{r}
+#investigate liberal filtered all SNP dataset
+investigate.pca.outliers(gen = liberal.all.gen, std=2:5)
+```
+
+
+#check whether the 13 SNPs separating the species in the conservatively filtered unlinked dataset are the same SNPs separating the liberally filtered dataset
+```{r}
+genlight=conserv.unlinked.gen
+pca <- glPca(genlight, nf=10)
+df<-as.data.frame(cbind(as.character(genlight@chromosome), genlight@position, pca$loadings[,1]))
+colnames(df)<-c("chrom","pos","PC1loading")
+df$PC1loading<-as.numeric(as.character(df$PC1loading))
+conserv.unlink.outliers<-df[abs(df$PC1loading) > sd(df$PC1loading)*4,]
+thirteen<- as.vector(paste(conserv.unlink.outliers$chrom,conserv.unlink.outliers$pos))
+
+genlight=liberal.all.gen
+pca <- glPca(genlight, nf=10)
+df<-as.data.frame(cbind(as.character(genlight@chromosome), genlight@position, pca$loadings[,1]))
+colnames(df)<-c("chrom","pos","PC1loading")
+df$PC1loading<-as.numeric(as.character(df$PC1loading))
+liberal.link.outliers<-df[abs(df$PC1loading) > sd(df$PC1loading)*4,]
+onefiftythree<-as.vector(paste(liberal.link.outliers$chrom,liberal.link.outliers$pos))
+
+#check how many of the 13 are in the 153
+thirteen[thirteen %in% onefiftythree]
+```
+
