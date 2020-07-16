@@ -1,0 +1,329 @@
+---
+title: "lostruct"
+author: "Devon DeRaad"
+date: "7/15/2020"
+output: html_document
+---
+
+```{r, results = "hide", warning=FALSE}
+library(lostruct)
+library(vcfR)
+library(adegenet)
+library(gaston)
+library(ggplot2)
+library(gridExtra)
+```
+
+```{r}
+#read in all data
+eryth.vcf <- read.vcfR("~/Downloads/3bLibUnfilteredVCF/populations.snps.vcf")
+#convert to genlight
+ery.genlight <- vcfR2genlight(eryth.vcf, n.cores=1)
+#drop two individuals with too much missing data
+ery.genlight<-ery.genlight[ery.genlight$ind.names != "E_trichroa_4702" & ery.genlight$ind.names != "E_trichroa_27882"]
+
+#create list of chromosomes we want to search
+chrom.tab<-table(ery.genlight$chromosome)
+chrom.tab<-chrom.tab[chrom.tab >100] #retain scaffolds with greater than 100 SNPs
+#retain only scaffolds mapped to chromosomes and reorder to match genomic position
+chrom.tab<-chrom.tab[c(1,10,11,13,14,15,16,18,19,20,22,2,3,4,5,6,7,8,9,24)]
+#list the ordered names of the chromosomes we want to search
+chroms<-names(chrom.tab)
+```
+
+```{r}
+chrom.list<-list() #initialize empty list to hold chroms
+snp.list<-list() #init empty list to hold snps
+#loop to create a matrix for each chromosome we want to search
+for (i in chroms){
+  chrom.mat<-t(as.matrix(ery.genlight))
+  chrom.list[[i]]<-chrom.mat[ery.genlight@chromosome== i,]
+  snp.list[[i]]<-ery.genlight@position[ery.genlight@chromosome == i]
+}
+
+#create a df that holds the starting and ending position of each window we will create
+#loop to create a matrix for each chromosome we want to search
+start.window<-c()
+end.window<-c()
+chrom.window<-c()
+window.df<-data.frame()
+for (i in chroms){
+  chrom<-as.vector(droplevels(ery.genlight@chromosome[ery.genlight@chromosome == i]))
+  pos<-ery.genlight@position[ery.genlight@chromosome == i]
+  for (j in 1:floor(length(pos)/50)){
+    start.window[j]<-pos[(50*j)-49]
+    end.window[j]<-pos[(50*j)]
+    chrom.window[j]<-chrom[50*j]
+  }
+  window.df<-rbind(window.df,cbind(chrom.window,start.window,end.window))
+  start.window<-c() #empty vectors
+  end.window<-c()
+  chrom.window<-c()
+}
+
+#window.df shows the start and end pos of all 700 windows
+
+#loop to make 50 SNP windowed pca for each chromosome individually
+pcs<-list() #open empty list
+for (i in 1:length(chrom.list)){
+  pcs[[i]] <- eigen_windows(chrom.list[[i]], win=50, k=2)
+}
+
+#loop to combine all 50 SNP windows into a single coherent df
+#create chrom.holder to track the chromosome of each window
+df<-pcs[[1]] #init df
+chrom.holder<- rep(chroms[1], times=nrow(pcs[[1]])) #init chrom holder
+for (i in 2:length(pcs)){
+  df<-rbind(df,pcs[[i]])
+  chrom.holder<-c(chrom.holder, rep(chroms[i], times=nrow(pcs[[i]])))
+}
+
+#calculate pcdist between all windows
+pcdist <- pc_dist(df,npc=2)
+
+#check out pcdist
+dim(pcdist)
+#make a vector to index out NA values
+na.inds <- is.na(pcdist[,1])
+table(na.inds)
+#index NAs out of pcdist, and also out of window.df
+pcdist<-pcdist[!na.inds,!na.inds]
+window.df<-window.df[!na.inds,]
+
+dim(pcdist)
+dim(window.df) #num of rows should match
+
+#calculate mds for all windows
+mds <- cmdscale(pcdist, eig=TRUE, k=2)
+```
+
+```{r}
+#
+plot(mds$points, xlab="Coordinate 1", ylab="Coordinate 2", col=as.factor(window.df$chrom.window))
+mincirc <- lostruct:::enclosing_circle(mds$points[,1:2] )
+mds.corners <- corners( mds$points[,1:2], prop=.05 )
+corner.cols <- c("red","blue","purple")
+ccols <- rep("black",nrow(mds$points))
+for (k in 1:ncol(mds.corners)) {
+  ccols[ mds.corners[,k] ] <- corner.cols[k]
+}
+plot( mds$points[,1:2], pch=20, col=adjustcolor(ccols,0.75), 
+      xlab="MDS coordinate 1", ylab="MDS coordinate 2", 
+      xlim=mincirc$ctr[1]+c(-1,1)*mincirc$rad,
+      ylim=mincirc$ctr[2]+c(-1,1)*mincirc$rad )
+#plot_circle( mincirc, col='red' )
+points( mincirc$three, col='red', cex=2 )
+points( mds$points[mincirc$index,], col='red', cex=1.5 )
+```
+
+```{r}
+#axis 1
+ggplot(as.data.frame(mds$points), aes(x=1:nrow(mds$points), y=(mds$points[,1]),color=window.df$chrom.window))+
+  geom_point()+
+  scale_color_manual(values = rep(c("black","grey"), times=10))+
+  theme_classic()+
+  theme(legend.position = 'none')
+
+#axis 2
+ggplot(as.data.frame(mds$points), aes(x=1:nrow(mds$points), y=(mds$points[,2]),color=window.df$chrom.window))+
+  geom_point()+
+  scale_color_manual(values = rep(c("black","grey"), times=10))+
+  theme_classic()+
+  theme(legend.position = 'none')
+
+#pull out outlier points
+y<-as.data.frame(mds$points)[mds$points[,2] > .25,][,2]
+x<-(1:nrow(mds$points))[mds$points[,2] > .25]
+outlier.values<-as.data.frame(cbind(x,y))
+
+#axis 2
+ggplot(as.data.frame(mds$points), aes(x=1:nrow(mds$points), y=(mds$points[,2]),color=window.df$chrom.window))+
+  geom_point()+
+  scale_color_manual(values = rep(c("black","grey"), times=10))+
+  theme_classic()+
+  theme(legend.position = 'none')+
+  geom_point(data = outlier.values, aes(x=x, y=y), color = "red")
+
+```
+
+```{r}
+#check out potential outlier windows
+window.df[mds$points[,2] > .25,]
+window.df[mds$points[,1] > 0 & mds$points[,2] < -.12,]
+window.df[mds$points[,1] > .1 & mds$points[,2] < -.07,]
+
+lostruct.8<-new("genlight", as.matrix(ery.genlight)[,ery.genlight@chromosome == 8 &
+                                                      ery.genlight@position >= 5474007 &
+                                                      ery.genlight@position <= 13449384])
+
+lostruct.8.2<-new("genlight", as.matrix(ery.genlight)[,ery.genlight@chromosome == 8 &
+                                                      ery.genlight@position >= 20712567 &
+                                                      ery.genlight@position <= 21928747])
+
+lostruct.11<-new("genlight", as.matrix(ery.genlight)[,ery.genlight@chromosome == 11 &
+                                                      ery.genlight@position >= 8146434 &
+                                                      ery.genlight@position <= 8576675])
+
+putative.inversion.list<-list(lostruct.8, lostruct.8.2, lostruct.11)
+names<-c("lostruct.8","lostruct.8.2","lostruct.11")
+par(mfrow=c(1,3))
+for (i in 1:length(putative.inversion.list)){
+  pca <- glPca(putative.inversion.list[[i]], nf=10)
+  pca.scores<-as.data.frame(pca$scores)
+  plot(pca.scores$PC1,pca.scores$PC2, col=as.factor(substr(putative.inversion.list[[i]]$ind.names, 1,3)),
+       main=names[i])
+}
+
+dev.off()
+
+```
+
+```{r}
+#vet each potentially inverted region by calculating heterozygosity
+#in an inversion we expect 2 distinct classes of heterozygosity btwn het and homozygous individuals
+lostruct.matrix<-as.matrix(lostruct.8)
+#calculate heterozygosity in the inverted region
+het<-c()
+for (i in 1:nrow(lostruct.matrix)){
+  het[i]<-sum(na.omit(lostruct.matrix[i,] == 1))/sum(!is.na(lostruct.matrix[i,]))
+}
+ggplot(as.data.frame(het), aes(x=het))+
+  geom_histogram(bins=15,color="black", fill="grey")+
+  labs(x="Heterozygosity across inverted region", y = "Frequency")+
+  theme_classic()
+
+#8.2
+lostruct.matrix<-as.matrix(lostruct.8.2)
+#calculate heterozygosity in the inverted region
+het<-c()
+for (i in 1:nrow(lostruct.matrix)){
+  het[i]<-sum(na.omit(lostruct.matrix[i,] == 1))/sum(!is.na(lostruct.matrix[i,]))
+}
+ggplot(as.data.frame(het), aes(x=het))+
+  geom_histogram(bins=15,color="black", fill="grey")+
+  labs(x="Heterozygosity across inverted region", y = "Frequency")+
+  theme_classic()
+
+#11
+lostruct.matrix<-as.matrix(lostruct.11)
+#calculate heterozygosity in the inverted region
+het<-c()
+for (i in 1:nrow(lostruct.matrix)){
+  het[i]<-sum(na.omit(lostruct.matrix[i,] == 1))/sum(!is.na(lostruct.matrix[i,]))
+}
+ggplot(as.data.frame(het), aes(x=het))+
+  geom_histogram(bins=15,color="black", fill="grey")+
+  labs(x="Heterozygosity across inverted region", y = "Frequency")+
+  theme_classic()
+```
+
+#Figure showing 
+```{r}
+
+#only 8 seems to be a true inversion
+#make figure
+lostruct.matrix<-as.matrix(lostruct.8)
+#calculate heterozygosity in the inverted region
+het<-c()
+for (i in 1:nrow(lostruct.matrix)){
+  het[i]<-sum(na.omit(lostruct.matrix[i,] == 1))/sum(!is.na(lostruct.matrix[i,]))
+}
+
+#use table() to figure out how to set chromosome breaks on x axis
+#table(window.df$chrom.window)
+plotting.pos<-c()
+for (i in 1:length(table(window.df$chrom.window))){
+  plotting.pos[i]<-mean(c(sum(table(window.df$chrom.window)[0:i]), sum(table(window.df$chrom.window)[0:(i-1)])))
+}
+
+#plot1
+plot1<-ggplot(as.data.frame(mds$points), aes(x=1:nrow(mds$points), y=(mds$points[,2]),color=window.df$chrom.window))+
+  geom_point()+
+  scale_color_manual(values = rep(c("black","grey"), times=10))+
+  theme_classic()+
+  theme(legend.position = 'none')+
+  geom_point(data = outlier.values, aes(x=x, y=y), color = "red")+
+  ggtitle("putative inversion chr8:5474007-13449384")+
+  labs(x="", y="MDS axis 2")+
+  scale_x_continuous(breaks=plotting.pos, labels=names(table(window.df$chrom.window)))
+
+#plot2
+plot2<-ggplot(as.data.frame(het), aes(x=het))+
+  geom_histogram(bins=15,color="black", fill="grey")+
+  labs(x="Heterozygosity across inverted region", y = "Frequency")+
+  theme_classic()
+
+#ggplot color by heterozygosity, shape = species
+pca <- glPca(lostruct.8, nf=10)
+pca.scores<-as.data.frame(pca$scores)
+plot3<-ggplot(pca.scores, aes(x=PC1, y=PC2, col=het,
+                       shape=as.factor(substr(row.names(lostruct.matrix), 1,10)))) +
+  scale_color_gradient("heterozygosity")+
+  scale_shape_discrete("species")+
+  geom_point(cex = 2.5)+
+  theme_classic()+
+  theme()
+
+gl<-list(plot1, plot2, plot3)
+
+grid.arrange(
+  grobs = gl,
+  widths = c(1,1),
+  layout_matrix = rbind(c(1,1),
+                        c(2,3))
+)
+
+```
+
+```{r, fig.height = 6, fig.width = 12}
+#calculate LD
+ery.bed<-gaston::read.vcf("~/Downloads/3bLibUnfilteredVCF/populations.snps.vcf")
+
+#ery.bed@snps[,1]
+ery.bed.8<-select.snps(ery.bed, condition=ery.bed@snps[,1] == 8)
+ch8.ld<-LD(ery.bed.8, c(1,ncol(ery.bed.8)))
+chr8.ld<-ch8.ld[!is.na(ch8.ld[,1]), !is.na(ch8.ld[1,])]
+snp.pos<-ery.bed.8@snps$pos[!is.na(ch8.ld[,1])]
+length(snp.pos)
+dim(chr8.ld)
+
+df<-data.frame()
+for (i in 1:length(snp.pos)){
+  x<-rep(snp.pos[i], length=nrow(chr8.ld))
+  z<-chr8.ld[,i]
+  df<-rbind(df, as.data.frame(cbind(x,snp.pos,z)))
+}
+colnames(df)<-c("x","y","ld")
+
+map2color<-function(x,pal,limits=NULL){
+  if(is.null(limits)) limits=range(x)
+  pal[findInterval(x,seq(limits[1],limits[2],length.out=length(pal)+1), all.inside=TRUE)]
+}
+mypal <- colorRampPalette( c("white", "red" ) )( 100 )
+grad<-map2color(df$ld,mypal)
+
+plot4<-ggplot(df, aes(x, y)) +
+  geom_tile(aes(fill = ld), colour = grad, cex=.8)+
+  theme_classic()+
+  scale_fill_continuous(low="white", high="red", name = "LD")+
+  labs(x="Mbp",y="Mbp")+
+  scale_x_discrete(limit = c(0, 1e7, 2e7),
+                   labels = c("0","10","20"))+
+  scale_y_discrete(limit = c(0, 1e7, 2e7),
+                   labels = c("0","10","20"))
+
+
+gl<-list(plot1, plot2, plot3, plot4)
+grid.arrange(
+  grobs = gl,
+  widths = c(1,1,1),
+  layout_matrix = rbind(c(1,1,1),
+                        c(2,3,4))
+)
+```
+#Inversion in chr8 shows clear signs of increased LD ~8Mbp - ~10Mbp
+#Does not separate the two described species at all.
+#Does sharing an inversion w/ roughly HW frequency mean that this has to be a single, freely interbreeding population?
+
+
+
