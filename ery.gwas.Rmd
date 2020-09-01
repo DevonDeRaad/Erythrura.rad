@@ -1,0 +1,196 @@
+---
+title: "ery.gwas"
+author: "Devon DeRaad"
+date: "9/1/2020"
+output: html_document
+---
+
+
+```{r}
+library(ggplot2)
+library(vcfR)
+library(adegenet)
+library(rrBLUP)
+
+ery.morph<-read.csv("~/Downloads/ErythPNG_morphDataRAD.csv")[1:18,1:11]
+```
+
+```{r}
+#histogram of Nares to tip
+ggplot(ery.morph,aes(x=Nares.tip)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+#histogram of width at nares
+ggplot(ery.morph,aes(x=Width.Nares)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+#histogram of depth at nares
+ggplot(ery.morph,aes(x=Depth.Nares)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+#histogram of gonys
+ggplot(ery.morph,aes(x=Gonys)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+#histogram of width mandible
+ggplot(ery.morph,aes(x=WidthMand)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+#histogram of wing chord
+ggplot(ery.morph,aes(x=WingChord)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+#histogram of tarsus
+ggplot(ery.morph,aes(x=TarsusDiag)) + 
+  geom_histogram(data=ery.morph[ery.morph$Species == "trichroa",],fill = "red", alpha = 0.35, binwidth = .25) +
+  geom_histogram(data=ery.morph[ery.morph$Species == "papuana",],fill = "blue", alpha = 0.35, binwidth = .25) +
+  theme_classic()
+
+
+#make PCA of overall bill size
+#make a pca of all samples without bill length variable
+new_pca<- prcomp(ery.morph[,5:9])
+
+#prepare data frame
+new_pca_df <- as.data.frame(new_pca$x)
+new_pca_df$species <- ery.morph$Species
+new_pca_df$sample<- ery.morph$KU_tiss
+head(new_pca_df)
+
+#ggplot pca
+ggplot(new_pca_df,aes(x=PC1,y=PC2,color=species))+
+  geom_point(cex=2.5)+
+  theme_bw()+
+  ggtitle("bill size")
+
+```
+
+```{r}
+ery.bill<-data.frame(sample=new_pca_df$sample,species=new_pca_df$species,billPC1=new_pca_df$PC1)
+
+spec<-paste0("E_",ery.morph$Species)
+ery.bill$KU_tiss<-paste0(spec,"_",ery.morph$KU_tiss)
+
+#read in vcf
+vcfR <- read.vcfR("~/Downloads/3bLibUnfilteredVCF/populations.snps.vcf")
+### convert vcfR to genlight
+genlight <- vcfR2genlight(vcfR)
+#turn genlight into snp matrix
+gen.mat<-as.matrix(genlight)
+(gen.mat)[1:10,1:10]
+measured.samples<-gen.mat[rownames(gen.mat) %in% ery.bill$KU_tiss,]
+rownames(measured.samples)
+measured.samples<-as.data.frame(measured.samples)
+
+#combine the matrix with the dataframe
+df<-merge(ery.bill, measured.samples, by.x = "KU_tiss", by.y = "row.names")
+df[1:10,1:10]
+
+#make pheno df
+pheno<-data.frame(sample=df$KU_tiss,billPC1=df$billPC1)
+
+#make geno df
+genotypes<-as.data.frame(t(df[,5:ncol(df)]))
+colnames(genotypes)<-df$KU_tiss
+geno.setup<-data.frame(markers=genlight@loc.names, chrom=genlight@chromosome, pos=genlight$position)
+geno<-cbind.data.frame(geno.setup,genotypes)
+geno[1:10,1:10]
+```
+
+```{r}
+#run GWAS
+scores <- GWAS(pheno,geno)
+knitr::include_graphics("/Users/devder/Desktop/ery.delimitr/scree.png")
+knitr::include_graphics("/Users/devder/Desktop/manhat.png")
+hist(scores$billPC1)
+abline(v=5, col="red")
+```
+
+```{r}
+#subset significant SNPS
+sig.snps<-scores[scores$billPC1 > 5,]
+
+#make a genlight with only the genotypes of significant snps
+outlier.genlight<-genlight[genlight@ind.names %in% df$KU_tiss, genlight@loc.names %in% sig.snps$markers]
+
+#Make a PCA with only sig genotypes
+gen_pca<- glPca(outlier.genlight, nf = 2)
+
+#prepare data frame
+gen_pca_df<-as.data.frame(gen_pca$scores)
+head(gen_pca_df)
+
+#ggplot pca
+ggplot(gen_pca_df,aes(x=PC1,y=PC2))+
+  geom_point(cex=2.5)+
+  theme_bw()+
+  ggtitle("bill size SNPs")
+
+head(gen_pca_df)
+df[1:10,1:10]
+
+gen_pca_df<-gen_pca_df[order(row.names(gen_pca_df)),]
+compare.df<-data.frame(sample=row.names(gen_pca_df),species=df$species,genPC1=gen_pca_df$PC1,billPC1=df$billPC1)
+
+```
+
+```{r}
+#Plot PC1 bill size against PC1 from bill-associated SNPs
+ggplot(compare.df,aes(x=billPC1,y=genPC1))+
+  geom_point(cex=2.5)+
+  theme_bw()+
+  ggtitle("bill size SNPs")
+  
+#trichroa only
+ggplot(compare.df,aes(x=billPC1,y=genPC1))+
+  geom_point(cex=2.5)+
+  theme_bw()+
+  ggtitle("trichroa")+
+  ylim(c(0,1))+
+  xlim(c(-2.5,0))
+
+#papuana only
+ggplot(compare.df,aes(x=billPC1,y=genPC1))+
+  geom_point(cex=2.5)+
+  theme_bw()+
+  ggtitle("papuana")+
+  ylim(c(-.5,-2))+
+  xlim(c(1.5,3.5))
+
+```
+
+```{r}
+#within species, our bill size SNPs are not predicting bill size
+measured.samples[,colnames(measured.samples) %in% sig.snps$markers]
+
+#when we include a kinship matrix that corrects for population structure
+#we lose statistical power to detect any SNPs of significant effect
+kin.corrected.gwas<-GWAS(pheno,geno, n.PC = 1)
+knitr::include_graphics("/Users/devder/Desktop/Screen Shot 2020-09-01 at 3.26.26 PM.png")
+knitr::include_graphics("/Users/devder/Desktop/Screen Shot 2020-09-01 at 3.26.40 PM.png")
+#list sig.snps
+sig.snps[,2:3]
+
+#Chr2:47059003 in in 'DGKB' diacylglycerol kinase beta
+#Chr2:72393292 is in 'CDKAL1' CDK5 regulatory subunit associated protein 1 like 1
+#Chr3:31437307 is upstream of 'VEGFA' vascular endothelial growth factor A
+#Chr5:48250848 is in a non-coding region 2Mb upstream of DLK1, which is a top gene associated with bill size in Darwin's Finches
+#Chr8:3945343 is upstream of 'KCNT2' potassium sodium-activated channel subfamily T member 2
+#Chr10:18298569 is in 'ANKDD1A' ankyrin repeat and death domain containing 1A
+#ChrZ:17367029 is directly upstream of 'SLCO4C1' solute carrier organic anion transporter family member 4C1
+#ChrZ:41092689 is in 'C1QTNF3' C1q and TNF related 3
+
+```
+
